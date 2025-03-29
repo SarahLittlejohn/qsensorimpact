@@ -1,0 +1,1 @@
+from qsensorimpact.parity_data import generate_parity_series
