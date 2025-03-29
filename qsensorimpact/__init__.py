@@ -1,1 +1,1 @@
-from qsensorimpact.parity_data import generate_parity_series
+from qsensorimpact.parity_data import generate_parity_series, generate_parity_series_dynamic, generate_parity_series_with_noise, generate_e2e_parity_series_with_noise

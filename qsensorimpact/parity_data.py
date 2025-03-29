@@ -1,4 +1,5 @@
 import random
+import numpy as np
 
 def generate_parity_series(n, switching_rate):
     """
