@@ -61,28 +61,6 @@ def generate_gaussian_matrix(baseline, initial_amplitude, distances, length_impa
     matrix = np.vstack(rows)
     return matrix
 
-# Parameters
-baseline = 7
-initial_amplitude = 3  # The first Gaussian dip reaches 3
-distances = np.arange(0, 10.5, 0.5)  # Distances controlling the Gaussian dips
-noise_std = 0.3  # Standard deviation of the noise for Gaussian dips
-baseline_noise_std = 0.3  # Standard deviation of the noise for baseline
-
-# Generate the matrix
-# gaussian_matrix = generate_gaussian_matrix(baseline, initial_amplitude, distances, noise_std=noise_std, baseline_noise_std=baseline_noise_std)
-
-# # Plot the rows to visualize
-# plt.figure(figsize=(12, 8))
-# for i, row in enumerate(gaussian_matrix):
-#     label = "Baseline (Noisy)" if i == 0 else f"Gaussian Dip {i}"
-#     plt.plot(row, label=label, alpha=0.7)
-
-# plt.title("Gaussian Matrix with Noise Added to Baseline and Dips")
-# plt.xlabel("Time")
-# plt.ylabel("Value")
-# plt.legend()
-# plt.show()
-
 def generate_gaussian_matrix_variable_impact(baseline, initial_amplitude, distances, length_impact=200, noise_std=0.3, baseline_noise_std=0.3, impact=0):
     """
     Generate a matrix where each row is a Gaussian dip series, with noise added to the Gaussian region
