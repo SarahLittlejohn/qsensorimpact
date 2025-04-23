@@ -136,3 +136,39 @@ def generate_2d_gaussian_matrix_single_impact_time_independent(baseline, initial
     matrix = np.minimum(matrix, gaussian_noisy)
 
     return matrix
+
+def generate_2d_time_dependent_gaussian_matrix_single_impact(
+    baseline,
+    initial_amplitude,
+    impact_x,
+    impact_y,
+    snapshots,
+    grid_size=12,
+    length_impact=200,
+    noise_std=0.3,
+    baseline_noise_std=0.3
+):
+    x, y = np.meshgrid(np.arange(grid_size), np.arange(grid_size))
+    all_matrices = []
+
+    for t in range(snapshots):
+        # Time-dependent amplitude using sinusoidal modulation
+        impact_amplitude = (baseline - initial_amplitude) * np.sin(np.pi * t / (snapshots - 1))
+
+        # Generate baseline + noise
+        matrix = np.random.normal(loc=baseline, scale=baseline_noise_std, size=(grid_size, grid_size))
+
+        # Gaussian impact
+        gaussian = baseline - impact_amplitude * np.exp(
+            -((x - impact_x) ** 2 + (y - impact_y) ** 2) / (2 * length_impact)
+        )
+
+        noise = np.random.normal(loc=0, scale=noise_std, size=(grid_size, grid_size))
+        gaussian_noisy = gaussian + noise
+
+        # Combine baseline with impact, keeping the lower of the two
+        impacted_matrix = np.minimum(matrix, gaussian_noisy)
+
+        all_matrices.append(impacted_matrix)
+
+    return np.stack(all_matrices)
