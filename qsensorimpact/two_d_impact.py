@@ -2,7 +2,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from scipy.optimize import curve_fit, fsolve
 
-def generate_two_d_impact(matrix_switching_rates, grid_size, baseline): 
+def generate_two_d_impact_snapshot(matrix_switching_rates, grid_size, baseline): 
     def reverse_bell_curve(x, a, b, c, d):
         return -a * np.exp(-((x - b)**2) / (2 * c**2)) + d
 
