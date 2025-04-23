@@ -2,10 +2,32 @@ import numpy as np
 import matplotlib.pyplot as plt
 from scipy.optimize import curve_fit, fsolve
 
-def generate_one_d_impact(matrix_data, d, params=True):
+def generate_one_d_impact(matrix_data, d, matrix_errors=None, params=True):
     all_fitted_values = []
     min_switching_rates = []
     min_times = []
+    min_switching_rate_errors = []
+    min_times_errors = []
+
+    # Create a matrix of simulated switching rates & errors
+    def propagate_fit_errors(x, popt, perr):
+        a, b, c, d = popt
+        sigma_a, sigma_b, sigma_c, sigma_d = perr
+
+        # Compute partial derivatives
+        exp_term = np.exp(-((x - b) ** 2) / (2 * c ** 2))
+        df_da = -exp_term
+        df_db = a * exp_term * ((x - b) / (c ** 2))
+        df_dc = a * exp_term * ((x - b) ** 2) / (c ** 3)
+        df_dd = 1  # d contributes directly
+
+        # Propagated error formula
+        sigma_y = np.sqrt((df_da * sigma_a) ** 2 +
+                        (df_db * sigma_b) ** 2 +
+                        (df_dc * sigma_c) ** 2 +
+                        (df_dd * sigma_d) ** 2)
+
+        return sigma_y
 
     def reverse_bell_curve(x, a, b, c, d):
         """Reverse Gaussian (bell curve) model."""
@@ -13,8 +35,10 @@ def generate_one_d_impact(matrix_data, d, params=True):
 
     def fit_switching_rate(x, y):
         """Fit the data to the reverse bell curve model."""
-        popt, _ = curve_fit(reverse_bell_curve, x, y, p0=[1, np.mean(x), 50, 7])
-        return reverse_bell_curve(x, *popt), popt
+        popt, pcov = curve_fit(reverse_bell_curve, x, y, p0=[1, np.mean(x), 50, 7])
+        perr = np.sqrt(np.diag(pcov))
+
+        return reverse_bell_curve(x, *popt), popt, perr
 
     # Create a figure with 4 subplots
     fig, axs = plt.subplots(2, 2, figsize=(12, 10))
@@ -33,18 +57,29 @@ def generate_one_d_impact(matrix_data, d, params=True):
         valid_indices = ~np.isnan(row)
         x_valid = np.where(valid_indices)[0]
         y_valid = row[valid_indices]
-        
+
         if len(x_valid) == 0:
             continue
 
-        fitted_values, _ = fit_switching_rate(x_valid, y_valid)
+        fitted_values, popt, perr = fit_switching_rate(x_valid, y_valid)
         all_fitted_values.append((x_valid, fitted_values))
+        
+        fit_errors = propagate_fit_errors(x_valid, popt, perr)
 
         min_rate = np.min(fitted_values)
         min_index = np.argmin(fitted_values)
         min_time = x_valid[min_index]
         min_switching_rates.append(min_rate)
         min_times.append(min_time)
+
+        if matrix_errors is not None:
+            error_valid = matrix_errors[i][valid_indices]
+            total_error = np.sqrt(fit_errors[min_index]**2 + error_valid[min_index]**2)
+            min_switching_rate_errors.append(total_error)
+            min_times_errors.append(perr[1])
+        else:
+            min_switching_rate_errors.append(0)
+            min_times_errors.append(0)
 
         axs[0, 0].plot(x_valid, y_valid, alpha=0.7, label=f"d={dist}")
         axs[0, 0].plot(x_valid, fitted_values, '--', linewidth=1.5, label=f"Fit d={dist}")
@@ -59,7 +94,27 @@ def generate_one_d_impact(matrix_data, d, params=True):
     axs[0, 1].legend(handles, labels, loc='center', title="Legend", ncol=3, frameon=False, fontsize=8, borderpad=1)
 
     # --- Bottom Left: Scatter Plot of Minimum Switching Rates with Fits ---
-    axs[1, 0].scatter(min_times, min_switching_rates, color='red', s=50)
+    if matrix_errors is not None:
+        axs[1, 0].errorbar(
+            min_times,
+            min_switching_rates,
+            xerr=min_times_errors,
+            yerr=min_switching_rate_errors,
+            fmt='o',
+            ecolor='black',
+            elinewidth=1.5,
+            capsize=4,
+            color='red',
+            label='Min Points with Error'
+        )
+    else:
+        axs[1, 0].scatter(
+            min_times,
+            min_switching_rates,
+            color='red',
+            s=50,
+            label='Min Points'
+        )
     axs[1, 0].set_title("Scatter of Minimum Switching Rates with Fits")
     axs[1, 0].set_xlabel("Time (min_times)")
     axs[1, 0].set_ylabel("Min Switching Rate")
@@ -117,6 +172,9 @@ def generate_one_d_impact(matrix_data, d, params=True):
     # Print extracted parameters
     print(f"Crossover Time: {crossover_time:.2f}")
     print(f"Extracted d_impact: {global_min_d:.2f}")
+    if matrix_errors is not None:
+        print("Fit error at min:", fit_errors[min_index])
+        print("Original data error at min:", error_valid[min_index])
 
     if params:
         # Fit the exponetial decay

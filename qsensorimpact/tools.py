@@ -119,3 +119,20 @@ def generate_gaussian_matrix_variable_impact(baseline, initial_amplitude, distan
     # Convert the list of rows into a matrix
     matrix = np.vstack(rows)
     return matrix
+
+def generate_2d_gaussian_matrix_single_impact_time_independent(baseline, initial_amplitude, impact_x, impact_y, grid_size=12, 
+    length_impact=200, noise_std=0.3, baseline_noise_std=0.3
+):
+    matrix = np.random.normal(loc=baseline, scale=baseline_noise_std, size=(grid_size, grid_size))
+    x, y = np.meshgrid(np.arange(grid_size), np.arange(grid_size))
+
+    gaussian = baseline - (baseline - initial_amplitude) * np.exp(
+        -((x - impact_x)**2 + (y - impact_y)**2) / (2 * length_impact)
+    )
+
+    noise = np.random.normal(loc=0, scale=noise_std, size=(grid_size, grid_size))
+    gaussian_noisy = gaussian + noise
+
+    matrix = np.minimum(matrix, gaussian_noisy)
+
+    return matrix
