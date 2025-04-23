@@ -2,22 +2,10 @@ import numpy as np
 import matplotlib.pyplot as plt
 from scipy.optimize import curve_fit, fsolve
 
-def generate_one_d_impact(matrix_data, d):
+def generate_one_d_impact(matrix_data, d, params=True):
     all_fitted_values = []
     min_switching_rates = []
     min_times = []
-
-    # if simul_data:
-    #     simulated_switching_rates_rows = []
-    #     for row in perfect_switching_rates:
-    #         simulated_parity_rates = generate_parity_series_dynamic(row, simulation_segment)
-    #         switching_rates, switching_raste_errors = find_dynamic_switching_rates_noisy_series(simulated_parity_rates, simulation_segment)
-    #         simulated_switching_rates_rows.append(switching_rates)
-
-    #     # Create a matrix of simulated switching rates
-    #     matrix_switching_rates = np.array(simulated_switching_rates_rows)
-    # else:
-    #     matrix_switching_rates = perfect_switching_rates
 
     def reverse_bell_curve(x, a, b, c, d):
         """Reverse Gaussian (bell curve) model."""
@@ -129,3 +117,22 @@ def generate_one_d_impact(matrix_data, d):
     # Print extracted parameters
     print(f"Crossover Time: {crossover_time:.2f}")
     print(f"Extracted d_impact: {global_min_d:.2f}")
+
+    if params:
+        # Fit the exponetial decay
+        def exp_decay(distance, lambda_):
+            return 7 - 4 * np.exp(-lambda_ * distance)
+
+        def linear_model(distance, sigma):
+            return min_times[0] + distance * sigma
+
+        adjusted_d = np.array(adjusted_d)
+
+        params_A, _ = curve_fit(exp_decay, adjusted_d, min_switching_rates)
+        lambda_estimate = params_A[0]
+
+        params_t, _ = curve_fit(linear_model, adjusted_d, min_times)
+        sigma_estimate = params_t[0]
+
+        print(lambda_estimate)
+        print(sigma_estimate)
