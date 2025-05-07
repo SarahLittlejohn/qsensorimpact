@@ -1,8 +1,35 @@
 import numpy as np
 import matplotlib.pyplot as plt
+import matplotlib.animation as animation
 from scipy.optimize import curve_fit, fsolve
 
-def generate_two_d_impact_snapshot(matrix_switching_rates, grid_size, baseline): 
+def analyse_two_d_impact_snapshot(matrix_switching_rates, grid_size, baseline):
+    """
+    Analyze and visualize a 2D switching rate matrix to extract the spatial coordinates of an impact.
+
+    This function fits each row and column of a 2D matrix (typically representing qubit switching rates)
+    to a reverse Gaussian curve in order to estimate the impact's location (`d_impact`) in the grid.
+    The extracted impact point is the average center position of the fitted Gaussian dips in both
+    horizontal and vertical directions.
+
+    Visualizations include:
+        - A heatmap of the input matrix (switching rates).
+        - Line plots of original data and Gaussian fits for each row and each column.
+        - A schematic qubit layout showing the estimated impact location.
+
+    Parameters:
+        matrix_switching_rates (np.ndarray): 2D array (grid_size x grid_size) of switching rate values.
+        grid_size (int): The number of qubits along one side of the square grid.
+        baseline (float): The expected baseline switching rate, used as the initial guess for curve fitting.
+
+    Returns:
+        None. (Displays plots and prints the extracted spatial coordinates of the impact.)
+    
+    Notes:
+        - The reverse Gaussian function used is: -a * exp(-((x - b)^2) / (2 * c^2)) + d
+        - The extracted impact position is interpreted as the point where the switching rate was most suppressed.
+        - Assumes only one major impact exists in the grid.
+    """ 
     def reverse_bell_curve(x, a, b, c, d):
         return -a * np.exp(-((x - b)**2) / (2 * c**2)) + d
 
@@ -68,3 +95,29 @@ def generate_two_d_impact_snapshot(matrix_switching_rates, grid_size, baseline):
     plt.show()
 
     print(f"Extracted d_impact: ({d_impact_extracted_x:.2f}, {d_impact_extracted_y:.2f})")
+
+def analyse_two_d_impact(tensor, interval=100, cmap='viridis'):
+    fig, ax = plt.subplots()
+    im = ax.imshow(tensor[0], cmap=cmap, vmin=np.min(tensor), vmax=np.max(tensor))
+    cbar = plt.colorbar(im, ax=ax)
+    cbar.set_label('Value')
+
+    ax.set_xlabel("X")
+    ax.set_ylabel("Y")
+
+    # Create title as a Text object
+    title_text = ax.text(0.5, 1.05, f"Snapshot 1/{tensor.shape[0]}", transform=ax.transAxes,
+                         ha="center", va="bottom", fontsize=12)
+
+    def update(frame):
+        im.set_array(tensor[frame])
+        title_text.set_text(f"Snapshot {frame + 1}/{tensor.shape[0]}")
+        return [im, title_text]
+
+    ani = animation.FuncAnimation(
+        fig, update, frames=tensor.shape[0], interval=interval, blit=False
+    )
+
+    plt.tight_layout()
+    plt.show()
+    return ani
