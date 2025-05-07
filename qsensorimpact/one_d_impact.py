@@ -2,7 +2,36 @@ import numpy as np
 import matplotlib.pyplot as plt
 from scipy.optimize import curve_fit, fsolve
 
-def generate_one_d_impact(matrix_data, d, matrix_errors=None, params=True):
+def analyse_one_d_impact(matrix_data, d, matrix_errors=None, params=True):
+    """
+    Analyse and visualise a 1D array of time-dependent switching rate data to extract impact characteristics.
+
+    This function fits each row of switching rate data (over time) to a reverse Gaussian model to identify 
+    the minimum switching rate (interpreted as the strongest impact) and the time at which it occurs. It then
+    fits exponential decay models to the minimum points across distances to estimate the location and dynamics 
+    of the impact in a qubit array or similar system.
+
+    Visual outputs include:
+        - Raw switching rate data and fitted reverse Gaussian curves
+        - Scatter plot of minimum points with error bars
+        - Exponential fits to left and right sides of the impact
+        - Schematic plot of the qubit layout with estimated impact location
+
+    Parameters:
+        matrix_data (np.ndarray): 2D array of switching rates with shape (time, spatial distance).
+                                  The first row is assumed to be a baseline measurement.
+        d (list or np.ndarray): List of distances corresponding to each row in matrix_data (excluding the baseline row).
+        matrix_errors (np.ndarray, optional): 2D array of the same shape as matrix_data, providing error estimates.
+        params (bool, optional): If True, fit and print exponential decay and propagation parameters.
+
+    Returns:
+        None. (Produces plots and prints extracted physical parameters such as impact location, decay rate, and velocity.)
+
+    Notes:
+        - The minimum switching rate is taken as an indicator of the impact strength at each spatial location.
+        - The crossover point between the left and right exponential fits is interpreted as the true impact location.
+        - Exponential decay and linear time shift models are fitted to estimate physical characteristics like λ (decay) and σ (propagation speed).
+    """
     all_fitted_values = []
     min_switching_rates = []
     min_times = []
