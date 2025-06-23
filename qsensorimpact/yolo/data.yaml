@@ -1,0 +1,4 @@
+train: ../data/images/train
+val: ../data/images/train
+nc: 1
+names: ['impact']
