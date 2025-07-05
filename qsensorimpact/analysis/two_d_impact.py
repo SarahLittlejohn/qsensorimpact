@@ -1,3 +1,4 @@
+# region Import and Set-up
 import sys
 import os
 import numpy as np
@@ -21,8 +22,9 @@ from qsensorimpact.yolo.yolov5.utils.torch_utils import select_device
 from qsensorimpact.yolo.yolov5.utils.plots import Annotator
 from qsensorimpact.yolo.yolov5.models.common import DetectMultiBackend
 from qsensorimpact.yolo.yolov5.utils.dataloaders import LoadImages
+# endregion
 
-
+# region 1. Snapshot-based 2D Analysis
 def analyse_two_d_impact_snapshot(matrix_switching_rates, grid_size, baseline):
     """
     Analyze and visualize a 2D switching rate matrix to extract the spatial coordinates of an impact.
@@ -115,7 +117,9 @@ def analyse_two_d_impact_snapshot(matrix_switching_rates, grid_size, baseline):
     plt.show()
 
     print(f"Extracted d_impact: ({d_impact_extracted_x:.2f}, {d_impact_extracted_y:.2f})")
+# endregion
 
+# region 2. Time-dependent 2D Tensor Animation
 def analyse_two_d_impact(tensor, interval=100, cmap='viridis'):
     fig, ax = plt.subplots()
     im = ax.imshow(tensor[0], cmap=cmap, vmin=np.min(tensor), vmax=np.max(tensor))
@@ -140,6 +144,95 @@ def analyse_two_d_impact(tensor, interval=100, cmap='viridis'):
     plt.tight_layout()
     plt.show()
     return ani
+# endregion
+
+# region 3. YOLO generation and inference
+def run_yolo_on_tensor(tensor, weights_path, grid_size, conf_thres=0.25, temp_dir="frames_detect", output_video="detected_impacts.mp4"):
+    shutil.rmtree(temp_dir, ignore_errors=True)
+    os.makedirs(temp_dir, exist_ok=True)
+    height = width = grid_size
+
+    for i, frame in enumerate(tensor):
+        fig, ax = plt.subplots()
+        ax.imshow(frame, cmap='viridis', vmin=np.min(tensor), vmax=np.max(tensor))
+        ax.axis('off')
+        filename = os.path.join(temp_dir, f"frame_{i:04d}.png")
+        plt.savefig(filename, bbox_inches='tight', pad_inches=0)
+        plt.close(fig)
+
+    device = select_device('')
+    model = DetectMultiBackend(weights_path, device=device)
+    stride, names, pt = model.stride, model.names, model.pt
+    model.warmup(imgsz=(1, 3, 640, 640))
+    dataset = LoadImages(temp_dir, img_size=640, stride=stride, auto=pt)
+
+    result_frames = []
+    detections = []
+
+    for path, img, im0s, _, _ in dataset:
+        img = torch.from_numpy(img).to(device).float() / 255.0
+        if img.ndimension() == 3:
+            img = img.unsqueeze(0)
+
+        pred = model(img)
+        pred = non_max_suppression(pred, conf_thres=conf_thres)
+
+        im0 = im0s.copy()
+        annotator = Annotator(im0, line_width=2, example=str(names))
+
+        frame_id = int(os.path.basename(path).split("_")[1].split(".")[0])
+        image_height, image_width = im0.shape[:2]
+        scale_x = grid_size / image_width
+        scale_y = grid_size / image_height
+
+        for det in pred:
+            if det is not None and len(det):
+                det[:, :4] = scale_boxes(img.shape[2:], det[:, :4], im0.shape).round()
+
+                for *xyxy, conf, cls in det:
+                    x1, y1, x2, y2 = [int(c.item()) for c in xyxy]
+                    x_center = (x1 + x2) / 2
+                    y_center = (y1 + y2) / 2
+                    x_center_grid = x_center * scale_x
+                    y_center_grid = y_center * scale_y
+
+                    detections.append((frame_id, x_center_grid, y_center_grid))
+                    label = f"{names[int(cls)]} {conf:.2f}"
+                    annotator.box_label(xyxy, label=label)
+
+        result_frames.append(annotator.result())
+
+    if result_frames:
+        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+        out = cv2.VideoWriter(output_video, fourcc, 10, (result_frames[0].shape[1], result_frames[0].shape[0]))
+        for frame in result_frames:
+            out.write(frame)
+        out.release()
+        print(f"Annotated video saved to {output_video}")
+    else:
+        print("No frames annotated — check confidence threshold?")
+
+    return detections
+# endregion
+
+# region 4. YOLO Detection Post-Processing
+def extract_detections_3d(temp_dir, image_width, image_height, grid_size):
+    scale_x = grid_size / image_width
+    scale_y = grid_size / image_height
+
+    data = []
+    for fname in sorted(os.listdir(temp_dir)):
+        if fname.endswith(".txt") and fname.startswith("frame_"):
+            frame_id = int(fname.split("_")[1].split(".")[0])
+            with open(os.path.join(temp_dir, fname), "r") as f:
+                for line in f:
+                    parts = line.strip().split()
+                    cls, x_center, y_center = int(parts[0]), float(parts[1]), float(parts[2])
+                    # Convert to grid scale
+                    x_center = x_center * image_width * scale_x
+                    y_center = y_center * image_height * scale_y
+                    data.append((frame_id, x_center, y_center))
+    return data
 
 def cluster_and_find_centers(detections, eps=3, min_samples=10, temporal_weight=0.1):
     raw_data = np.array([[x, y, t * temporal_weight] for t, x, y in detections])
@@ -159,26 +252,49 @@ def cluster_and_find_centers(detections, eps=3, min_samples=10, temporal_weight=
 
     return labels, centers, np.array([[x, y, t / temporal_weight] for x, y, t in raw_data])
 
+def predict_midpoint(detections, save_path="predicted_midpoint_plot.png"):
+    """
+    Given a list of detections (frame, x, y), compute and plot the midpoint.
 
-def extract_detections_3d(temp_dir, image_width, image_height, grid_size):
-    scale_x = grid_size / image_width
-    scale_y = grid_size / image_height
+    Parameters:
+        detections (list of tuples): Each tuple is (frame, x, y)
+        save_path (str): File path to save the 3D plot
 
-    data = []
-    for fname in sorted(os.listdir(temp_dir)):
-        if fname.endswith(".txt") and fname.startswith("frame_"):
-            frame_id = int(fname.split("_")[1].split(".")[0])
-            with open(os.path.join(temp_dir, fname), "r") as f:
-                for line in f:
-                    parts = line.strip().split()
-                    cls, x_center, y_center = int(parts[0]), float(parts[1]), float(parts[2])
-                    # Convert to grid scale
-                    x_center = x_center * image_width * scale_x
-                    y_center = y_center * image_height * scale_y
-                    data.append((frame_id, x_center, y_center))
-    return data
+    Returns:
+        tuple: (mean_x, mean_y, mean_frame)
+    """
+    if not detections:
+        print("No detections provided.")
+        return None
 
+    frames, xs, ys = zip(*detections)
+    mean_x = sum(xs) / len(xs)
+    mean_y = sum(ys) / len(ys)
+    mean_frame = sum(frames) / len(frames)
 
+    fig = plt.figure()
+    ax = fig.add_subplot(111, projection='3d')
+
+    ax.scatter(xs, ys, frames, c='blue', alpha=0.6, label='Detections')
+    ax.scatter([mean_x], [mean_y], [mean_frame], c='red', s=100, marker='X', label='Predicted Midpoint')
+
+    ax.set_xlabel("X")
+    ax.set_ylabel("Y")
+    ax.set_zlabel("Frame")
+    ax.set_title("Detections and Predicted Midpoint")
+    ax.legend()
+
+    # Save plot
+    os.makedirs(os.path.dirname(save_path) or ".", exist_ok=True)
+    plt.savefig(save_path, dpi=300, bbox_inches='tight')
+    plt.close()
+
+    print(f"Saved midpoint plot to {save_path}")
+    return mean_x, mean_y, mean_frame
+
+# endregion
+
+# region 5. YOLO Detection and Clustering Plots
 def plot_detections_3d(detections, output_path="detection_plot_3d.png"):
     fig = plt.figure()
     ax = fig.add_subplot(111, projection='3d')
@@ -228,149 +344,76 @@ def plot_clusters_3d(raw_data, labels, centers, output_path="clustered_3d.png", 
     plt.close()
 
     print(f"Cluster plot saved to {output_path}")
+# endregion
 
+# region 6. FULL YOLO Detection Pipeline
+def analyse_with_detection(tensor, weights_path, grid_size, conf_thres=0.25):
+    detections = run_yolo_on_tensor(tensor, weights_path, grid_size, conf_thres=conf_thres)
 
-def analyse_with_detection(tensor, weights_path, grid_size, output_video="detected_impacts.mp4", temp_dir="frames_detect", conf_thres=0.25):
-    os.makedirs(temp_dir, exist_ok=True)
-    shutil.rmtree(temp_dir, ignore_errors=True)
-    os.makedirs(temp_dir, exist_ok=True)
-    height = width = grid_size
-
-    for i, frame in enumerate(tensor):
-        fig, ax = plt.subplots()
-        im = ax.imshow(frame, cmap='viridis', vmin=np.min(tensor), vmax=np.max(tensor))
-        ax.axis('off')
-        filename = os.path.join(temp_dir, f"frame_{i:04d}.png")
-        plt.savefig(filename, bbox_inches='tight', pad_inches=0)
-        plt.close(fig)
-
-    device = select_device('')
-    model = DetectMultiBackend(weights_path, device=device)
-    stride, names, pt = model.stride, model.names, model.pt
-    model.warmup(imgsz=(1, 3, 640, 640))
-
-    dataset = LoadImages(temp_dir, img_size=640, stride=stride, auto=pt)
-    result_frames = []
-
-    for path, img, im0s, _, _ in dataset:
-        img = torch.from_numpy(img).to(device).float() / 255.0
-        if img.ndimension() == 3:
-            img = img.unsqueeze(0)
-
-        pred = model(img)
-        pred = non_max_suppression(pred, conf_thres=conf_thres)
-        print(f"Detections for frame {path}: {pred}")
-        frame_id = int(os.path.basename(path).split("_")[1].split(".")[0])
-        num_detections = sum(len(det) if det is not None else 0 for det in pred)
-        print(f"Frame {frame_id}: {num_detections} detections")
-
-
-        im0 = im0s.copy()
-        annotator = Annotator(im0, line_width=2, example=str(names))
-        for i, det in enumerate(pred):
-            if det is not None and len(det):
-                det[:, :4] = scale_boxes(img.shape[2:], det[:, :4], im0.shape).round()
-
-                frame_id = int(os.path.basename(path).split("_")[1].split(".")[0])
-                label_path = os.path.join(temp_dir, f"frame_{frame_id:04d}.txt")
-                with open(label_path, "w") as f:
-                    for *xyxy, conf, cls in det:
-                        x1, y1, x2, y2 = [int(c.item()) for c in xyxy]
-                        box_w = x2 - x1
-                        box_h = y2 - y1
-                        x_center = x1 + box_w / 2
-                        y_center = y1 + box_h / 2
-
-                        image_height, image_width = im0.shape[:2]
-
-                        x_center /= image_width
-                        y_center /= image_height
-                        box_w /= width
-                        box_h /= height
-
-                        f.write(f"{int(cls)} {x_center:.6f} {y_center:.6f} {box_w:.6f} {box_h:.6f} {conf:.4f}\n")
-
-                        label = f"{names[int(cls)]} {conf:.2f}"
-                        annotator.box_label(xyxy, label=label)
-
-
-        result_frames.append(annotator.result())
-
-    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-    out = cv2.VideoWriter(output_video, fourcc, 10, (result_frames[0].shape[1], result_frames[0].shape[0]))
-
-    for frame in result_frames:
-        out.write(frame)
-    out.release()
-
-    print(f"Annotated video saved to {output_video}")
-    detections = extract_detections_3d(temp_dir, image_width, image_height, grid_size)
-    first_impact_detections = [d for d in detections if 30 <= d[0] < 80]
-    second_impact_detections = [d for d in detections if 80 <= d[0] < 130]
-
-    print(f"First impact: {len(first_impact_detections)} detections")
-    print(f"Second impact: {len(second_impact_detections)} detections")
-    mid_x, mid_y, mit_t = predict_midpoint(detections)
-    print(mid_x)
-    print(mid_y)
-    print(mit_t)
+    # Midpoint + clustering
+    mid_x, mid_y, mid_t = predict_midpoint(detections)
+    print(mid_x, mid_y, mid_t)
 
     for e in [1, 2, 3, 4, 5]:
         labels, centers, raw = cluster_and_find_centers(detections, eps=e, min_samples=10)
         print(f"eps={e}, clusters={len(set(labels) - {-1})}")
 
     labels, centers, raw_data = cluster_and_find_centers(detections)
-    print("\nDetected impact centers (in original grid units):")
+    plot_clusters_3d(raw_data, labels, centers, grid_size=grid_size)
+
     for label, (x, y, t) in centers.items():
         print(f"  Cluster {label}: X = {x:.2f}, Y = {y:.2f}, Time = {t:.2f}")
-    plot_clusters_3d(raw_data, labels, centers, grid_size=25)
+
     return centers
 
+# endregion
 
-def predict_midpoint(detections, save_path="predicted_midpoint_plot.png"):
-    """
-    Given a list of detections (frame, x, y), compute and plot the midpoint.
-
-    Parameters:
-        detections (list of tuples): Each tuple is (frame, x, y)
-        save_path (str): File path to save the 3D plot
-
-    Returns:
-        tuple: (mean_x, mean_y, mean_frame)
-    """
-    if not detections:
-        print("No detections provided.")
-        return None
-
-    frames, xs, ys = zip(*detections)
-    mean_x = sum(xs) / len(xs)
-    mean_y = sum(ys) / len(ys)
-    mean_frame = sum(frames) / len(frames)
-
-    fig = plt.figure()
-    ax = fig.add_subplot(111, projection='3d')
-
-    ax.scatter(xs, ys, frames, c='blue', alpha=0.6, label='Detections')
-    ax.scatter([mean_x], [mean_y], [mean_frame], c='red', s=100, marker='X', label='Predicted Midpoint')
-
-    ax.set_xlabel("X")
-    ax.set_ylabel("Y")
-    ax.set_zlabel("Frame")
-    ax.set_title("Detections and Predicted Midpoint")
-    ax.legend()
-
-    # Save plot
-    os.makedirs(os.path.dirname(save_path) or ".", exist_ok=True)
-    plt.savefig(save_path, dpi=300, bbox_inches='tight')
-    plt.close()
-
-    print(f"Saved midpoint plot to {save_path}")
-    return mean_x, mean_y, mean_frame
-
+# region 7. Curve Fitting Models
 def reverse_bell_curve(x, a, b, c, d):
-    return -a * np.exp(-((x - b)**2) / (2 * c**2)) + d
+    return -a * np.exp(-((x - b) ** 2) / (2 * c ** 2)) + d
 
-# Plot quartile schematic
+def exp_recovery(x, a, b, c):
+    return a * (1 - np.exp(-b * x)) + c
+
+def fit_models_and_select_best(x_data, y_data):
+    try:
+        p0_gauss = [1, np.argmin(y_data), 10, np.mean(y_data)]
+        popt_gauss, _ = curve_fit(reverse_bell_curve, x_data, y_data, p0=p0_gauss)
+        fit_gauss = reverse_bell_curve(x_data, *popt_gauss)
+    except RuntimeError:
+        fit_gauss, popt_gauss = None, None
+
+    try:
+        t0 = np.argmin(y_data)
+        x_exp = x_data[t0:] - x_data[t0]
+        y_exp = y_data[t0:]
+        p0_exp = [np.ptp(y_exp), 0.2, y_exp[0]]
+        bounds = ([0, 0.01, -np.inf], [np.inf, 5.0, np.inf])
+        popt_exp, _ = curve_fit(exp_recovery, x_exp, y_exp, p0=p0_exp, bounds=bounds)
+        fit_exp = exp_recovery(x_exp, *popt_exp)
+    except RuntimeError:
+        fit_exp, popt_exp = None, None
+
+    if fit_gauss is not None:
+        residuals_gauss = np.sum((fit_gauss[t0:] - y_data[t0:])**2)
+    else:
+        residuals_gauss = np.inf
+
+    if fit_exp is not None:
+        residuals_exp = np.sum((fit_exp - y_data[t0:])**2)
+    else:
+        residuals_exp = np.inf
+
+    if residuals_exp < residuals_gauss:
+        t_min = t0 + np.argmin(fit_exp)
+        full_curve = np.concatenate([np.full(t0, fit_exp[0]), fit_exp])
+        return full_curve, t_min, 'exponential', t0
+    else:
+        t_min = popt_gauss[1] if popt_gauss is not None else None
+        return fit_gauss, t_min, 'gaussian', t0
+# endregion
+
+# region 8. Quartile Analysis
 def plot_quartile_schematic(avg_values, quartile_indices, save_path):
     grid_size = avg_values.shape[0]
     quartile_map = np.zeros((grid_size * grid_size,), dtype=int)
@@ -395,7 +438,6 @@ def plot_quartile_schematic(avg_values, quartile_indices, save_path):
     plt.savefig(save_path)
     plt.close()
 
-# Main analysis function
 def analyse_quartiled_qubits(tensor, flag_1, flag_2, save_dir="quartile_analysis_plots"):
     os.makedirs(save_dir, exist_ok=True)
 
@@ -405,8 +447,10 @@ def analyse_quartiled_qubits(tensor, flag_1, flag_2, save_dir="quartile_analysis
     sorted_indices = np.argsort(flat_avg)
     quartile_indices = np.array_split(sorted_indices, 4)
 
+    # Plot schematic
     plot_quartile_schematic(avg_values, quartile_indices, os.path.join(save_dir, "quartile_schematic.png"))
 
+    # Prepare data
     time_series = tensor.reshape(tensor.shape[0], -1)
     quartile_means = []
     for indices in quartile_indices:
@@ -417,20 +461,24 @@ def analyse_quartiled_qubits(tensor, flag_1, flag_2, save_dir="quartile_analysis
     x_data = np.arange(time_series.shape[0])
     y_data = quartile_means[0]
 
-    try:
-        popt, _ = curve_fit(reverse_bell_curve, x_data, y_data, p0=[1, np.argmax(-y_data), 10, np.mean(y_data)])
-        fitted_curve = reverse_bell_curve(x_data, *popt)
-        t_min = popt[1]
-    except RuntimeError:
-        fitted_curve = None
-        t_min = None
+    # Fit both models and choose best
+    fitted_curve, t_min, model_label, t0 = fit_models_and_select_best(x_data, y_data)
 
+    # --- Plot 1: Quartile averages ---
     plt.figure(figsize=(10, 6))
     for i, mean_vals in enumerate(quartile_means):
         plt.plot(mean_vals, label=f'Quartile {i+1}')
     if fitted_curve is not None:
-        plt.plot(x_data, fitted_curve, 'k--', label='Fitted Reverse Bell (Q1)')
-        plt.axvline(t_min, color='k', linestyle=':', label=f'Minimum at t={t_min:.1f}')
+        if model_label == 'exponential':
+            # Only plot from t0 onward
+            x_fit = x_data[t0:]
+            y_fit = fitted_curve[t0:]
+        else:
+            x_fit = x_data
+            y_fit = fitted_curve
+
+        plt.plot(x_fit, y_fit, 'k--', label=f'Best Fit ({model_label})')        
+    plt.axvline(t_min, color='k', linestyle=':', label=f'Minimum at t={t_min:.1f}')
     plt.axvspan(flag_1, flag_2, color='gray', alpha=0.3, label='Analysis Window')
     plt.xlabel("Time Step")
     plt.ylabel("Average Value")
@@ -440,10 +488,11 @@ def analyse_quartiled_qubits(tensor, flag_1, flag_2, save_dir="quartile_analysis
     plt.savefig(os.path.join(save_dir, "quartile_means.png"))
     plt.close()
 
+    # --- Plot 2: All qubits ---
     plt.figure(figsize=(10, 6))
     for i in range(time_series.shape[1]):
         plt.plot(time_series[:, i], alpha=0.5)
-    plt.axvspan(flag_1, flag_2, color='gray', alpha=0.3, label='Analysis Window')
+    plt.axvspan(flag_1, flag_2, color='gray', alpha=0.3)
     plt.xlabel("Time Step")
     plt.ylabel("Value")
     plt.title("Individual Qubit Values Over Time")
@@ -451,4 +500,5 @@ def analyse_quartiled_qubits(tensor, flag_1, flag_2, save_dir="quartile_analysis
     plt.savefig(os.path.join(save_dir, "all_qubits_over_time.png"))
     plt.close()
 
-    return f"Plots saved in: {save_dir}. Minimum of Q1 reverse bell curve is at t = {t_min:.2f}" if t_min is not None else "Plots saved, but reverse bell curve fitting failed."
+    return f"Plots saved in: {save_dir}. Best model: {model_label}, minimum at t = {t_min:.2f}" if t_min is not None else "Plots saved, but model fitting failed."
+# endregion

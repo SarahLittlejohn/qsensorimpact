@@ -1,6 +1,7 @@
 import numpy as np
 import math
 
+# region 1: 1D Gaussian Impact Generators
 # Generating the perfect gaussian data
 def generate_gaussian_matrix(baseline, initial_amplitude, distances, length_impact=200, noise_std=0.3, baseline_noise_std=0.3):
     """
@@ -121,6 +122,9 @@ def generate_gaussian_matrix_variable_impact(baseline, initial_amplitude, distan
     matrix = np.vstack(rows)
     return matrix
 
+# endregion
+
+# region 2. 2D Time-Independent Gaussian Impacts
 # Gaussian data of time independent impact on 2D array
 def generate_2d_gaussian_matrix_single_impact_time_independent(baseline, initial_amplitude, impact_x, impact_y, grid_size=12, 
     length_impact=200, noise_std=0.3, baseline_noise_std=0.3
@@ -160,7 +164,9 @@ def generate_2d_gaussian_matrix_single_impact_time_independent(baseline, initial
 
     return matrix
 
-# Gaussian data of time dependent impact on 2D array
+# endregion
+
+# region 3. 2D Time-Dependent Gaussian Impacts
 def generate_2d_time_dependent_gaussian_matrix_single_impact(
     baseline,
     initial_amplitude,
@@ -218,3 +224,61 @@ def generate_2d_time_dependent_gaussian_matrix_single_impact(
         all_matrices.append(impacted_matrix)
 
     return np.stack(all_matrices)
+# endregion
+
+# region 4. 2D Delta time dependent impacts
+def generate_2d_time_dependent_delta_impact(
+    baseline,
+    initial_drop,
+    impact_x,
+    impact_y,
+    snapshots,
+    grid_size=12,
+    spatial_spread=2.0,
+    time_decay=0.05,
+    noise_std=0.3,
+    baseline_noise_std=0.3
+):
+    """
+    Generate a sequence of 2D matrices simulating a delta-like impact that decays over time.
+
+    This function models a spatially distributed impact that starts as a negative dip 
+    and returns to the baseline exponentially, affecting surrounding qubits.
+
+    Parameters:
+        baseline (float): Baseline value of the grid.
+        initial_drop (float): Maximum depth of the impact at t=0.
+        impact_x (float): X-coordinate of the impact center.
+        impact_y (float): Y-coordinate of the impact center.
+        snapshots (int): Number of time steps to simulate.
+        grid_size (int, optional): Size of the square grid.
+        spatial_spread (float, optional): Spatial spread (σ) of the impact.
+        time_decay (float, optional): Controls the exponential recovery rate.
+        noise_std (float, optional): Std dev of impact-related noise.
+        baseline_noise_std (float, optional): Std dev of baseline noise.
+
+    Returns:
+        np.ndarray: Tensor of shape (snapshots, grid_size, grid_size)
+    """
+    x, y = np.meshgrid(np.arange(grid_size), np.arange(grid_size))
+    all_matrices = []
+
+    for t in range(snapshots):
+        # Time-decayed impact amplitude
+        decay_factor = np.exp(-t * time_decay)
+        impact_amplitude = initial_drop * decay_factor
+
+        # Gaussian spatial impact shape (not time-varying)
+        spatial_decay = np.exp(-((x - impact_x)**2 + (y - impact_y)**2) / (2 * spatial_spread**2))
+        delta_impact = -impact_amplitude * spatial_decay
+
+        # Add noise to impact and to baseline
+        impact_noise = np.random.normal(0, noise_std, size=(grid_size, grid_size))
+        baseline_noise = np.random.normal(baseline, baseline_noise_std, size=(grid_size, grid_size))
+
+        # Combine baseline with negative impact
+        combined = baseline_noise + delta_impact + impact_noise
+        all_matrices.append(combined)
+
+    return np.stack(all_matrices)
+# endregion
