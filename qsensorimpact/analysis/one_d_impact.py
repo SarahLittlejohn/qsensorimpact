@@ -2,6 +2,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from scipy.optimize import curve_fit, fsolve
 
+# region 1. Analyse 1D impact
 def analyse_one_d_impact(matrix_data, d, matrix_errors=None, params=True):
     """
     Analyse and visualise a 1D array of time-dependent switching rate data to extract impact characteristics.
@@ -223,3 +224,5 @@ def analyse_one_d_impact(matrix_data, d, matrix_errors=None, params=True):
 
         print(lambda_estimate)
         print(sigma_estimate)
+    
+#endregion

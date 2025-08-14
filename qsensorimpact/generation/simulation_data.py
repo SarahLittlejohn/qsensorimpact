@@ -144,3 +144,86 @@ def find_dynamic_switching_rates_noisy_series(parity_series, segment_length):
         switching_rate_errors.append(error)
 
     return switching_rates, switching_rate_errors
+
+def estimate_switching_rate_with_resampling(generator_function, num_trials=50, iqr_filter=True):
+    """
+    Estimates switching rate by resampling and removing outliers.
+
+    Parameters:
+    generator_function: a function that returns a new parity series each time it's called
+    num_trials: how many parity series to generate
+    iqr_filter: whether to apply IQR filtering to remove outliers
+
+    Returns:
+    mean_rate, std_rate, filtered_rates
+    """
+
+    rates = []
+    
+    for _ in range(num_trials):
+        series = generator_function()
+        try:
+            rate, _ = find_static_switching_rate_clean_series(series)
+            rates.append(rate)
+        except Exception as e:
+            continue  # skip if bad input or edge case
+    
+    rates = np.array(rates)
+
+    if iqr_filter:
+        q1 = np.percentile(rates, 25)
+        q3 = np.percentile(rates, 75)
+        iqr = q3 - q1
+        lower = q1 - 1.5 * iqr
+        upper = q3 + 1.5 * iqr
+        rates = rates[(rates >= lower) & (rates <= upper)]
+
+    return np.mean(rates), np.std(rates), rates.tolist()
+
+
+def estimate_switching_rate_with_resampling_hmm(generator_function, num_trials=50, iqr_filter=True):
+    """
+    Estimates switching rate using HMM by resampling and removing outliers.
+
+    Parameters:
+    generator_function: a function that returns a new noisy parity series each time it's called
+    num_trials: how many parity series to generate
+    iqr_filter: whether to apply IQR filtering to remove outliers
+
+    Returns:
+    mean_rate: mean switching rate across filtered trials
+    std_rate: standard deviation (used as empirical error bar)
+    filtered_rates: list of switching rates after filtering
+    avg_model_error: mean of the model-predicted error values
+    """
+
+    rates = []
+    model_errors = []
+
+    for _ in range(num_trials):
+        series = generator_function()
+        try:
+            rate, error = find_static_switching_rate_noisy_series(series)
+            rates.append(rate)
+            model_errors.append(error)
+        except Exception:
+            continue
+
+    rates = np.array(rates)
+    model_errors = np.array(model_errors)
+
+    if iqr_filter and len(rates) >= 5:
+        q1 = np.percentile(rates, 25)
+        q3 = np.percentile(rates, 75)
+        iqr = q3 - q1
+        lower = q1 - 1.5 * iqr
+        upper = q3 + 1.5 * iqr
+        mask = (rates >= lower) & (rates <= upper)
+        rates = rates[mask]
+        model_errors = model_errors[mask]
+
+    mean_rate = np.mean(rates)
+    std_rate = np.std(rates)
+    avg_model_error = np.mean(model_errors)
+
+    return mean_rate, std_rate, rates.tolist(), avg_model_error
