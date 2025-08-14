@@ -9,6 +9,7 @@ import matplotlib.animation as animation
 import matplotlib.colors as mcolors
 from pathlib import Path
 from scipy.optimize import curve_fit, fsolve
+from scipy.ndimage import map_coordinates
 import cv2
 import torch
 import shutil
@@ -140,7 +141,7 @@ def analyse_two_d_impact(tensor, interval=100, cmap='viridis'):
     ani = animation.FuncAnimation(
         fig, update, frames=tensor.shape[0], interval=interval, blit=False
     )
-    print("here")
+
     plt.tight_layout()
     plt.show()
     return ani
@@ -197,8 +198,8 @@ def run_yolo_on_tensor(tensor, weights_path, grid_size, conf_thres=0.25, temp_di
                     y_center_grid = y_center * scale_y
 
                     detections.append((frame_id, x_center_grid, y_center_grid))
-                    label = f"{names[int(cls)]} {conf:.2f}"
-                    annotator.box_label(xyxy, label=label)
+                    # label = f"{names[int(cls)]} {conf:.2f}"
+                    # annotator.box_label(xyxy, label=label)
 
         result_frames.append(annotator.result())
 
@@ -350,21 +351,65 @@ def plot_clusters_3d(raw_data, labels, centers, output_path="clustered_3d.png", 
 def analyse_with_detection(tensor, weights_path, grid_size, conf_thres=0.25):
     detections = run_yolo_on_tensor(tensor, weights_path, grid_size, conf_thres=conf_thres)
 
-    # Midpoint + clustering
-    mid_x, mid_y, mid_t = predict_midpoint(detections)
-    print(mid_x, mid_y, mid_t)
+    # ---- robust "is empty" check for lists/tuples/ndarrays/None ----
+    def _is_empty(d):
+        if d is None:
+            return True
+        # numpy arrays
+        if hasattr(d, "size"):
+            return d.size == 0
+        # sequences
+        try:
+            return len(d) == 0
+        except Exception:
+            return True
+    # ----------------------------------------------------------------
 
+    if _is_empty(detections):
+        print("No detections; skipping midpoint/clustering.")
+        return {}, {}   # centers, min_t_by_cluster
+
+    # Midpoint (guarded)
+    mp = predict_midpoint(detections)
+    if mp is not None:
+        mid_x, mid_y, mid_t = mp
+        print(mid_x, mid_y, mid_t)
+    else:
+        print("predict_midpoint returned None (continuing).")
+
+    # Optional sweep (guarded against empties by the early return above)
     for e in [1, 2, 3, 4, 5]:
-        labels, centers, raw = cluster_and_find_centers(detections, eps=e, min_samples=10)
+        labels, centers_tmp, raw = cluster_and_find_centers(detections, eps=e, min_samples=10)
         print(f"eps={e}, clusters={len(set(labels) - {-1})}")
 
+    # Main clustering
     labels, centers, raw_data = cluster_and_find_centers(detections)
+    if not centers:
+        print("No clusters found.")
+        return {}, {}
+
     plot_clusters_3d(raw_data, labels, centers, grid_size=grid_size)
 
-    for label, (x, y, t) in centers.items():
-        print(f"  Cluster {label}: X = {x:.2f}, Y = {y:.2f}, Time = {t:.2f}")
+    for label, (x, y, t_center) in centers.items():
+        print(f"  Cluster {label}: X = {x:.2f}, Y = {y:.2f}, Time = {t_center:.2f}")
 
-    return centers
+    T, Y, X = tensor.shape
+
+    print("\nMin values at each cluster center:")
+    min_t_by_cluster = {}
+    for label, (x, y, _) in centers.items():
+        coords = np.vstack([
+            np.arange(T),
+            np.full(T, y, dtype=float),
+            np.full(T, x, dtype=float),
+        ])
+        interpolated_vals = map_coordinates(tensor, coords, order=1, mode='nearest')
+        min_idx = int(np.argmin(interpolated_vals))
+        min_val = float(interpolated_vals[min_idx])
+        min_t_by_cluster[label] = min_idx
+        print(f"  Cluster {label}: Min = {min_val:.4f} at time index t = {min_idx}")
+
+    return centers, min_t_by_cluster
 
 # endregion
 
@@ -429,10 +474,12 @@ def plot_quartile_schematic(avg_values, quartile_indices, save_path):
 
     plt.figure(figsize=(6, 6))
     im = plt.imshow(quartile_map, cmap=cmap, norm=norm)
-    plt.colorbar(im, ticks=[1, 2, 3, 4], label='Quartile')
+    plt.colorbar(im, ticks=[1, 2, 3, 4], label='Quartile assigment')
     plt.title("Qubit Quartile Assignment")
     plt.xticks(np.arange(grid_size))
+    plt.xlabel("Horizontal qubit co-ordinate")
     plt.yticks(np.arange(grid_size))
+    plt.ylabel("Vertical qubit co-ordinate")
     plt.grid(False)
     plt.tight_layout()
     plt.savefig(save_path)
@@ -478,11 +525,11 @@ def analyse_quartiled_qubits(tensor, flag_1, flag_2, save_dir="quartile_analysis
             y_fit = fitted_curve
 
         plt.plot(x_fit, y_fit, 'k--', label=f'Best Fit ({model_label})')        
-    plt.axvline(t_min, color='k', linestyle=':', label=f'Minimum at t={t_min:.1f}')
-    plt.axvspan(flag_1, flag_2, color='gray', alpha=0.3, label='Analysis Window')
-    plt.xlabel("Time Step")
-    plt.ylabel("Average Value")
-    plt.title("Quartile Averages Over Time")
+    plt.axvline(t_min, color='k', linestyle=':', label = rf'Minimum at $\tau = {t_min:.1f}$')
+    plt.axvspan(flag_1, flag_2, color='gray', alpha=0.3, label='Analysis window')
+    plt.xlabel(r'$\tau$', fontsize=16, labelpad=6)
+    plt.ylabel(r'$\Gamma{(quartile mean)}$', fontsize=16, labelpad=6)
+    plt.title("Quartile Means Over Time")
     plt.legend()
     plt.tight_layout()
     plt.savefig(os.path.join(save_dir, "quartile_means.png"))
@@ -493,8 +540,8 @@ def analyse_quartiled_qubits(tensor, flag_1, flag_2, save_dir="quartile_analysis
     for i in range(time_series.shape[1]):
         plt.plot(time_series[:, i], alpha=0.5)
     plt.axvspan(flag_1, flag_2, color='gray', alpha=0.3)
-    plt.xlabel("Time Step")
-    plt.ylabel("Value")
+    plt.xlabel(r'$\tau$')
+    plt.ylabel(r'$\Gamma$')
     plt.title("Individual Qubit Values Over Time")
     plt.tight_layout()
     plt.savefig(os.path.join(save_dir, "all_qubits_over_time.png"))
