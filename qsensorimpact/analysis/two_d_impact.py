@@ -1,23 +1,16 @@
-# region Import and Set-up
-import sys
 import os
-import numpy as np
 import matplotlib
 matplotlib.use('TkAgg')
 import matplotlib.pyplot as plt
 import matplotlib.animation as animation
 import matplotlib.colors as mcolors
-from pathlib import Path
-from scipy.optimize import curve_fit, fsolve
+from scipy.optimize import curve_fit
 from scipy.ndimage import map_coordinates
 import cv2
 import torch
 import shutil
 from sklearn.cluster import DBSCAN
-import hdbscan
 import numpy as np
-import matplotlib.pyplot as plt
-from mpl_toolkits.mplot3d import Axes3D
 from qsensorimpact.yolo.yolov5.utils.general import non_max_suppression, scale_boxes
 from qsensorimpact.yolo.yolov5.utils.torch_utils import select_device
 from qsensorimpact.yolo.yolov5.utils.plots import Annotator
@@ -26,98 +19,98 @@ from qsensorimpact.yolo.yolov5.utils.dataloaders import LoadImages
 # endregion
 
 # region 1. Snapshot-based 2D Analysis
-def analyse_two_d_impact_snapshot(matrix_switching_rates, grid_size, baseline):
-    """
-    Analyze and visualize a 2D switching rate matrix to extract the spatial coordinates of an impact.
 
-    This function fits each row and column of a 2D matrix (typically representing qubit switching rates)
-    to a reverse Gaussian curve in order to estimate the impact's location (`d_impact`) in the grid.
-    The extracted impact point is the average center position of the fitted Gaussian dips in both
-    horizontal and vertical directions.
+def analyse_two_d_impact_snapshot(matrix_switching_rates, grid_size, baseline, true_impact=(7.50, 7.50)):
 
-    Visualizations include:
-        - A heatmap of the input matrix (switching rates).
-        - Line plots of original data and Gaussian fits for each row and each column.
-        - A schematic qubit layout showing the estimated impact location.
-
-    Parameters:
-        matrix_switching_rates (np.ndarray): 2D array (grid_size x grid_size) of switching rate values.
-        grid_size (int): The number of qubits along one side of the square grid.
-        baseline (float): The expected baseline switching rate, used as the initial guess for curve fitting.
-
-    Returns:
-        None. (Displays plots and prints the extracted spatial coordinates of the impact.)
-    
-    Notes:
-        - The reverse Gaussian function used is: -a * exp(-((x - b)^2) / (2 * c^2)) + d
-        - The extracted impact position is interpreted as the point where the switching rate was most suppressed.
-        - Assumes only one major impact exists in the grid.
-    """ 
     def reverse_bell_curve(x, a, b, c, d):
-        return -a * np.exp(-((x - b)**2) / (2 * c**2)) + d
+        return -a * np.exp(-((x - b) ** 2) / (2 * c ** 2)) + d
 
-    def fit_row_or_col(x, y):
-        popt, _ = curve_fit(reverse_bell_curve, x, y, p0=[1, np.mean(x), 3, baseline])
-        return popt, reverse_bell_curve(x, *popt)
+    def fit_vector(vec):
+        x = np.arange(grid_size, dtype=float)
+        a0 = max(1e-6, float(np.max(vec) - np.min(vec)))
+        b0 = float(np.argmin(vec))
+        c0 = max(1.0, grid_size / 5.0)
+        d0 = float(np.median(vec)) if np.isfinite(np.median(vec)) else baseline
+        p0 = [a0, b0, c0, d0]
+        try:
+            popt, _ = curve_fit(reverse_bell_curve, x, vec, p0=p0, maxfev=10000)
+        except Exception:
+            popt = np.array(p0, dtype=float)
+        return popt
 
-    fitted_rows, fitted_cols = [], []
-    all_fits_rows, all_fits_cols = [], []
+    x_idx   = np.arange(grid_size, dtype=float)
+    x_dense = np.linspace(0, grid_size - 1, 400)
 
-    x = np.arange(grid_size)
-    for i, row in enumerate(matrix_switching_rates):
-        popt, fit = fit_row_or_col(x, row)
-        fitted_rows.append(popt)
-        all_fits_rows.append(fit)
+    row_params = [fit_vector(row) for row in matrix_switching_rates]
+    col_params = [fit_vector(col) for col in matrix_switching_rates.T]
 
-    grid_data_T = matrix_switching_rates.T
-    for i, col in enumerate(grid_data_T):
-        popt, fit = fit_row_or_col(x, col)
-        fitted_cols.append(popt)
-        all_fits_cols.append(fit)
+    x_pred = float(np.mean([p[1] for p in row_params])) 
+    y_pred = float(np.mean([p[1] for p in col_params])) 
 
     fig, axs = plt.subplots(2, 2, figsize=(12, 10))
 
-    c = axs[0, 0].imshow(matrix_switching_rates, cmap='viridis', origin='lower', extent=[0, grid_size, 0, grid_size])
-    axs[0, 0].set_title("2D Qubit Matrix with Gaussian Impact")
-    axs[0, 0].set_xlabel("X Position")
-    axs[0, 0].set_ylabel("Y Position")
-    plt.colorbar(c, ax=axs[0, 0])
+    hm = axs[0, 0].imshow(
+        matrix_switching_rates, cmap='viridis', origin='lower',
+        extent=[0, grid_size, 0, grid_size]
+    )
+    axs[0, 0].set_title("Gaussian impact")
+    axs[0, 0].set_xlabel("x coordinate")
+    axs[0, 0].set_ylabel("y coordinate")
+    plt.colorbar(hm, ax=axs[0, 0])
 
-    for i, (row, fit) in enumerate(zip(matrix_switching_rates, all_fits_rows)):
-        axs[0, 1].plot(x, row, label=f"Row {i}", alpha=0.5)
-        axs[0, 1].plot(x, fit, '--', linewidth=1.5)
-    axs[0, 1].set_title("Fits for Rows")
-    axs[0, 1].set_xlabel("X Position")
-    axs[0, 1].set_ylabel("Switching Rate")
+    for i, (row, p) in enumerate(zip(matrix_switching_rates, row_params)):
+        axs[0, 1].plot(x_idx, row, marker='o', linestyle='-', alpha=0.45)
+        axs[0, 1].plot(x_dense, reverse_bell_curve(x_dense, *p), '--', linewidth=1.3, label=f"y{i}")
+    axs[0, 1].axvline(x_pred, color="red", linestyle="--", linewidth=1.6,
+                      label=fr"$x_{{\mathrm{{detected}}}} = {x_pred:.2f}$")
+    axs[0, 1].set_title("Fits for rows")
+    axs[0, 1].set_xlabel("x co-ordinate")
+    axs[0, 1].set_ylabel(r"$T_{\mathrm{sw}}$")
+    axs[0, 1].legend(ncol=2, fontsize=8)
 
-    for i, (col, fit) in enumerate(zip(grid_data_T, all_fits_cols)):
-        axs[1, 0].plot(x, col, label=f"Col {i}", alpha=0.5)
-        axs[1, 0].plot(x, fit, '--', linewidth=1.5)
-    axs[1, 0].set_title("Fits for Columns")
-    axs[1, 0].set_xlabel("Y Position")
-    axs[1, 0].set_ylabel("Switching Rate")
+    grid_T = matrix_switching_rates.T
+    for i, (col, p) in enumerate(zip(grid_T, col_params)):
+        axs[1, 0].plot(x_idx, col, marker='o', linestyle='-', alpha=0.45)
+        axs[1, 0].plot(x_dense, reverse_bell_curve(x_dense, *p), '--', linewidth=1.3, label=f"x{i}")
+    axs[1, 0].axvline(y_pred, color="red", linestyle="--", linewidth=1.6,
+                      label=fr"$y_{{\mathrm{{detected}}}} = {y_pred:.2f}$")
+    axs[1, 0].set_title("Fits for columns")
+    axs[1, 0].set_xlabel("y co-ordinate")
+    axs[1, 0].set_ylabel(r"$T_{\mathrm{sw}}$")
+    axs[1, 0].legend(ncol=2, fontsize=8)
 
     axs[1, 1].set_aspect('equal', adjustable='box')
     axs[1, 1].set_xlim(0, grid_size)
     axs[1, 1].set_ylim(0, grid_size)
-    axs[1, 1].set_title("Qubit Layout with d_impact")
-    axs[1, 1].set_xlabel("X Position")
-    axs[1, 1].set_ylabel("Y Position")
+    axs[1, 1].set_title("Qubit layout with detected and true impact")
+    axs[1, 1].set_xlabel("x co-ordinate")
+    axs[1, 1].set_ylabel("y co-ordinate")
 
     for i in range(grid_size):
         for j in range(grid_size):
-            circle = plt.Circle((j + 0.5, i + 0.5), 0.3, color='C0', fill=False)
-            axs[1, 1].add_patch(circle)
+            axs[1, 1].add_patch(plt.Circle((j + 0.5, i + 0.5), 0.3, color='C0', fill=False))
 
-    d_impact_extracted_x = np.mean([popt[1] for popt in fitted_rows])
-    d_impact_extracted_y = np.mean([popt[1] for popt in fitted_cols])
-    axs[1, 1].scatter(d_impact_extracted_x + 0.5, d_impact_extracted_y + 0.5, color='red', marker='x', s=100, linewidths=2, label=f"d_impact = ({d_impact_extracted_x:.2f}, {d_impact_extracted_y:.2f})")
+    axs[1, 1].scatter(
+        x_pred + 0.5, y_pred + 0.5,
+        color='black', marker='x', s=120, linewidths=2,
+        label=fr"Detected: ({x_pred:.2f}, {y_pred:.2f})"
+    )
+
+    x_true, y_true = true_impact
+    axs[1, 1].scatter(
+        x_true + 0.5, y_true + 0.5,
+        color='yellow', edgecolors='black', marker='o', s=90,
+        label=fr"Impact: ({x_true:.2f}, {y_true:.2f})"
+    )
+
     axs[1, 1].legend()
 
     plt.tight_layout()
     plt.show()
 
-    print(f"Extracted d_impact: ({d_impact_extracted_x:.2f}, {d_impact_extracted_y:.2f})")
+    print(f"Extracted d_impact (detected): ({x_pred:.2f}, {y_pred:.2f})")
+    return x_pred, y_pred
+
 # endregion
 
 # region 2. Time-dependent 2D Tensor Animation
@@ -148,17 +141,29 @@ def analyse_two_d_impact(tensor, interval=100, cmap='viridis'):
 # endregion
 
 # region 3. YOLO generation and inference
-def run_yolo_on_tensor(tensor, weights_path, grid_size, conf_thres=0.25, temp_dir="frames_detect", output_video="detected_impacts.mp4"):
+def run_yolo_on_tensor(
+    tensor,
+    weights_path,
+    grid_size,
+    conf_thres=0.25,
+    temp_dir="frames_detect",
+    output_dir="annotated_frames",
+    output_video="detected_impacts.mp4",
+    draw_centers=True,
+    save_annotated_frames=True,
+):
     shutil.rmtree(temp_dir, ignore_errors=True)
+    shutil.rmtree(output_dir, ignore_errors=True)
     os.makedirs(temp_dir, exist_ok=True)
-    height = width = grid_size
+    os.makedirs(output_dir, exist_ok=True)
 
+    vmin, vmax = float(np.min(tensor)), float(np.max(tensor))
     for i, frame in enumerate(tensor):
         fig, ax = plt.subplots()
-        ax.imshow(frame, cmap='viridis', vmin=np.min(tensor), vmax=np.max(tensor))
+        ax.imshow(frame, cmap='viridis', vmin=vmin, vmax=vmax)
         ax.axis('off')
-        filename = os.path.join(temp_dir, f"frame_{i:04d}.png")
-        plt.savefig(filename, bbox_inches='tight', pad_inches=0)
+        plt.savefig(os.path.join(temp_dir, f"frame_{i:04d}.png"),
+                    bbox_inches='tight', pad_inches=0)
         plt.close(fig)
 
     device = select_device('')
@@ -167,10 +172,10 @@ def run_yolo_on_tensor(tensor, weights_path, grid_size, conf_thres=0.25, temp_di
     model.warmup(imgsz=(1, 3, 640, 640))
     dataset = LoadImages(temp_dir, img_size=640, stride=stride, auto=pt)
 
-    result_frames = []
     detections = []
+    result_frames = []
 
-    for path, img, im0s, _, _ in dataset:
+    for path, img, im0, _, _ in dataset:
         img = torch.from_numpy(img).to(device).float() / 255.0
         if img.ndimension() == 3:
             img = img.unsqueeze(0)
@@ -178,13 +183,8 @@ def run_yolo_on_tensor(tensor, weights_path, grid_size, conf_thres=0.25, temp_di
         pred = model(img)
         pred = non_max_suppression(pred, conf_thres=conf_thres)
 
-        im0 = im0s.copy()
-        annotator = Annotator(im0, line_width=2, example=str(names))
-
+        annotator = Annotator(im0.copy(), line_width=2, example=str(names))
         frame_id = int(os.path.basename(path).split("_")[1].split(".")[0])
-        image_height, image_width = im0.shape[:2]
-        scale_x = grid_size / image_width
-        scale_y = grid_size / image_height
 
         for det in pred:
             if det is not None and len(det):
@@ -192,26 +192,37 @@ def run_yolo_on_tensor(tensor, weights_path, grid_size, conf_thres=0.25, temp_di
 
                 for *xyxy, conf, cls in det:
                     x1, y1, x2, y2 = [int(c.item()) for c in xyxy]
-                    x_center = (x1 + x2) / 2
-                    y_center = (y1 + y2) / 2
-                    x_center_grid = x_center * scale_x
-                    y_center_grid = y_center * scale_y
+                    label = f"{names[int(cls)]} {conf:.2f}"
+                    annotator.box_label([x1, y1, x2, y2], label=label)
 
-                    detections.append((frame_id, x_center_grid, y_center_grid))
-                    # label = f"{names[int(cls)]} {conf:.2f}"
-                    # annotator.box_label(xyxy, label=label)
+                    x_center_px = (x1 + x2) // 2
+                    y_center_px = (y1 + y2) // 2
 
-        result_frames.append(annotator.result())
+                    if draw_centers:
+                        cv2.circle(annotator.im, (x_center_px, y_center_px), 6, (0, 0, 255), -1)
+
+                    h, w = im0.shape[:2]
+                    x_center_grid = (x_center_px / w) * grid_size
+                    y_center_grid = (y_center_px / h) * grid_size
+
+                    detections.append((frame_id, float(x_center_grid), float(y_center_grid)))
+
+        annotated = annotator.result()
+        result_frames.append(annotated)
+
+        if save_annotated_frames:
+            cv2.imwrite(os.path.join(output_dir, f"annot_{frame_id:04d}.png"), annotated)
 
     if result_frames:
-        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-        out = cv2.VideoWriter(output_video, fourcc, 10, (result_frames[0].shape[1], result_frames[0].shape[0]))
+        h, w = result_frames[0].shape[:2]
+        out = cv2.VideoWriter(output_video, cv2.VideoWriter_fourcc(*'mp4v'), 10, (w, h))
         for frame in result_frames:
             out.write(frame)
         out.release()
-        print(f"Annotated video saved to {output_video}")
+        print(f"Annotated video: {output_video}")
+        print(f"Annotated frames (browse visually): {output_dir}/")
     else:
-        print("No frames annotated — check confidence threshold?")
+        print("No frames annotated — try lowering conf_thres or verify weights.")
 
     return detections
 # endregion
@@ -229,7 +240,6 @@ def extract_detections_3d(temp_dir, image_width, image_height, grid_size):
                 for line in f:
                     parts = line.strip().split()
                     cls, x_center, y_center = int(parts[0]), float(parts[1]), float(parts[2])
-                    # Convert to grid scale
                     x_center = x_center * image_width * scale_x
                     y_center = y_center * image_height * scale_y
                     data.append((frame_id, x_center, y_center))
@@ -254,16 +264,6 @@ def cluster_and_find_centers(detections, eps=3, min_samples=10, temporal_weight=
     return labels, centers, np.array([[x, y, t / temporal_weight] for x, y, t in raw_data])
 
 def predict_midpoint(detections, save_path="predicted_midpoint_plot.png"):
-    """
-    Given a list of detections (frame, x, y), compute and plot the midpoint.
-
-    Parameters:
-        detections (list of tuples): Each tuple is (frame, x, y)
-        save_path (str): File path to save the 3D plot
-
-    Returns:
-        tuple: (mean_x, mean_y, mean_frame)
-    """
     if not detections:
         print("No detections provided.")
         return None
@@ -273,8 +273,9 @@ def predict_midpoint(detections, save_path="predicted_midpoint_plot.png"):
     mean_y = sum(ys) / len(ys)
     mean_frame = sum(frames) / len(frames)
 
-    fig = plt.figure()
+    fig = plt.figure(figsize=(8, 6))
     ax = fig.add_subplot(111, projection='3d')
+    ax.margins(0.1)
 
     ax.scatter(xs, ys, frames, c='blue', alpha=0.6, label='Detections')
     ax.scatter([mean_x], [mean_y], [mean_frame], c='red', s=100, marker='X', label='Predicted Midpoint')
@@ -285,9 +286,8 @@ def predict_midpoint(detections, save_path="predicted_midpoint_plot.png"):
     ax.set_title("Detections and Predicted Midpoint")
     ax.legend()
 
-    # Save plot
     os.makedirs(os.path.dirname(save_path) or ".", exist_ok=True)
-    plt.savefig(save_path, dpi=300, bbox_inches='tight')
+    plt.savefig(save_path, dpi=300, bbox_inches='tight', pad_inches=0.2)
     plt.close()
 
     print(f"Saved midpoint plot to {save_path}")
@@ -297,28 +297,30 @@ def predict_midpoint(detections, save_path="predicted_midpoint_plot.png"):
 
 # region 5. YOLO Detection and Clustering Plots
 def plot_detections_3d(detections, output_path="detection_plot_3d.png"):
-    fig = plt.figure()
+    fig = plt.figure(figsize=(8, 6))
     ax = fig.add_subplot(111, projection='3d')
+    ax.margins(0.2)
 
     frames = [d[0] for d in detections]
     x_vals = [d[1] for d in detections]
     y_vals = [d[2] for d in detections]
 
     scatter = ax.scatter(x_vals, y_vals, frames, c=frames, cmap='viridis')
-    ax.set_xlabel('X Position (normalized)')
-    ax.set_ylabel('Y Position (normalized)')
-    ax.set_zlabel('Frame Number (Time)')
+    ax.set_xlabel('x co-ordinate')
+    ax.set_ylabel('y co-ordinate')
+    ax.set_zlabel('Time step')
     ax.set_title('Detected Object Positions Over Time')
 
     plt.colorbar(scatter, label='Frame Number')
-    plt.savefig(output_path, dpi=300, bbox_inches='tight')
+    plt.savefig(output_path, dpi=300, bbox_inches='tight', pad_inches=0.2)
     plt.close()
 
     print(f"3D detection plot saved to {output_path}")
 
 def plot_clusters_3d(raw_data, labels, centers, output_path="clustered_3d.png", grid_size=25):
-    fig = plt.figure()
+    fig = plt.figure(figsize=(8, 6))
     ax = fig.add_subplot(111, projection='3d')
+    ax.margins(0.2)
 
     raw_data = np.array(raw_data)
     labels = np.array(labels)
@@ -327,21 +329,22 @@ def plot_clusters_3d(raw_data, labels, centers, output_path="clustered_3d.png", 
         if label == -1:
             continue
         cluster_points = raw_data[labels == label]
-        ax.scatter(cluster_points[:, 0], cluster_points[:, 1], cluster_points[:, 2], label=f'Cluster {label}')
+        ax.scatter(cluster_points[:, 0], cluster_points[:, 1], cluster_points[:, 2], label=f'Detections')
 
         cx, cy, ct = centers[label]
-        ax.scatter(cx, cy, ct, c='black', marker='X', s=100, label=f'Center {label}')
+        ax.scatter(cx, cy, ct, c='black', marker='X', s=100,
+                label=f'Center: ({cx:.2f}, {cy:.2f}, {ct:.2f})')
 
     ax.set_xlim(0, grid_size)
     ax.set_ylim(0, grid_size)
     ax.set_zlim(0, max(raw_data[:, 2]) + 10)
 
-    ax.set_xlabel("X Position (grid)")
-    ax.set_ylabel("Y Position (grid)")
-    ax.set_zlabel("Time (Frame #)")
-    ax.set_title("Clustered Impacts with Centers (Grid Units)")
+    ax.set_xlabel('x co-ordinate')
+    ax.set_ylabel('y co-ordinate')
+    ax.set_zlabel('time step')
+    ax.set_title("Clustered Detections with Centers")
     ax.legend()
-    plt.savefig(output_path, dpi=300, bbox_inches='tight')
+    plt.savefig(output_path, dpi=300, bbox_inches='tight', pad_inches=0.3)
     plt.close()
 
     print(f"Cluster plot saved to {output_path}")
@@ -351,25 +354,20 @@ def plot_clusters_3d(raw_data, labels, centers, output_path="clustered_3d.png", 
 def analyse_with_detection(tensor, weights_path, grid_size, conf_thres=0.25):
     detections = run_yolo_on_tensor(tensor, weights_path, grid_size, conf_thres=conf_thres)
 
-    # ---- robust "is empty" check for lists/tuples/ndarrays/None ----
     def _is_empty(d):
         if d is None:
             return True
-        # numpy arrays
         if hasattr(d, "size"):
             return d.size == 0
-        # sequences
         try:
             return len(d) == 0
         except Exception:
             return True
-    # ----------------------------------------------------------------
 
     if _is_empty(detections):
         print("No detections; skipping midpoint/clustering.")
-        return {}, {}   # centers, min_t_by_cluster
+        return {}, {} 
 
-    # Midpoint (guarded)
     mp = predict_midpoint(detections)
     if mp is not None:
         mid_x, mid_y, mid_t = mp
@@ -377,12 +375,6 @@ def analyse_with_detection(tensor, weights_path, grid_size, conf_thres=0.25):
     else:
         print("predict_midpoint returned None (continuing).")
 
-    # Optional sweep (guarded against empties by the early return above)
-    for e in [1, 2, 3, 4, 5]:
-        labels, centers_tmp, raw = cluster_and_find_centers(detections, eps=e, min_samples=10)
-        print(f"eps={e}, clusters={len(set(labels) - {-1})}")
-
-    # Main clustering
     labels, centers, raw_data = cluster_and_find_centers(detections)
     if not centers:
         print("No clusters found.")
@@ -459,93 +451,156 @@ def fit_models_and_select_best(x_data, y_data):
 # endregion
 
 # region 8. Quartile Analysis
-def plot_quartile_schematic(avg_values, quartile_indices, save_path):
+
+Q_COLORS = ['blue', 'green', 'orange', 'red']
+
+def plot_quartile_schematic(avg_values, quartile_indices, save_path, q_colors=Q_COLORS):
     grid_size = avg_values.shape[0]
     quartile_map = np.zeros((grid_size * grid_size,), dtype=int)
-
-    for q, indices in enumerate(quartile_indices):
-        quartile_map[indices] = q + 1
-
+    for q, idx in enumerate(quartile_indices):
+        quartile_map[idx] = q + 1
     quartile_map = quartile_map.reshape((grid_size, grid_size))
 
-    cmap = mcolors.ListedColormap(['lightblue', 'lightgreen', 'orange', 'red'])
-    bounds = [0.5, 1.5, 2.5, 3.5, 4.5]
-    norm = mcolors.BoundaryNorm(bounds, cmap.N)
+    cmap  = mcolors.ListedColormap(q_colors)
+    norm  = mcolors.BoundaryNorm([0.5,1.5,2.5,3.5,4.5], cmap.N)
 
     plt.figure(figsize=(6, 6))
     im = plt.imshow(quartile_map, cmap=cmap, norm=norm)
-    plt.colorbar(im, ticks=[1, 2, 3, 4], label='Quartile assigment')
+    cbar = plt.colorbar(im, ticks=[1,2,3,4])
+    cbar.set_label('Quartile assignment')
     plt.title("Qubit Quartile Assignment")
-    plt.xticks(np.arange(grid_size))
-    plt.xlabel("Horizontal qubit co-ordinate")
-    plt.yticks(np.arange(grid_size))
-    plt.ylabel("Vertical qubit co-ordinate")
-    plt.grid(False)
-    plt.tight_layout()
-    plt.savefig(save_path)
-    plt.close()
+    plt.xticks(np.arange(grid_size)); plt.yticks(np.arange(grid_size))
+    plt.xlabel("Horizontal qubit co-ordinate"); plt.ylabel("Vertical qubit co-ordinate")
+    plt.tight_layout(); plt.savefig(save_path); plt.close()
 
 def analyse_quartiled_qubits(tensor, flag_1, flag_2, save_dir="quartile_analysis_plots"):
     os.makedirs(save_dir, exist_ok=True)
 
-    sliced_tensor = tensor[flag_1:flag_2]
-    avg_values = np.mean(sliced_tensor, axis=0)
+    sliced = tensor[flag_1:flag_2]
+    avg_values = np.mean(sliced, axis=0)
     flat_avg = avg_values.flatten()
-    sorted_indices = np.argsort(flat_avg)
-    quartile_indices = np.array_split(sorted_indices, 4)
+    sorted_idx = np.argsort(flat_avg)
+    quartile_indices = np.array_split(sorted_idx, 4)
 
-    # Plot schematic
-    plot_quartile_schematic(avg_values, quartile_indices, os.path.join(save_dir, "quartile_schematic.png"))
+    plot_quartile_schematic(avg_values, quartile_indices,
+                            os.path.join(save_dir, "quartile_schematic.png"),
+                            q_colors=Q_COLORS)
 
-    # Prepare data
     time_series = tensor.reshape(tensor.shape[0], -1)
-    quartile_means = []
-    for indices in quartile_indices:
-        group_vals = time_series[:, indices]
-        mean_vals = np.mean(group_vals, axis=1)
-        quartile_means.append(mean_vals)
+    quartile_means = [np.mean(time_series[:, idx], axis=1) for idx in quartile_indices]
 
     x_data = np.arange(time_series.shape[0])
     y_data = quartile_means[0]
-
-    # Fit both models and choose best
     fitted_curve, t_min, model_label, t0 = fit_models_and_select_best(x_data, y_data)
 
-    # --- Plot 1: Quartile averages ---
     plt.figure(figsize=(10, 6))
     for i, mean_vals in enumerate(quartile_means):
-        plt.plot(mean_vals, label=f'Quartile {i+1}')
+        plt.plot(mean_vals, label=f'Quartile {i+1}', color=Q_COLORS[i])
     if fitted_curve is not None:
-        if model_label == 'exponential':
-            # Only plot from t0 onward
-            x_fit = x_data[t0:]
-            y_fit = fitted_curve[t0:]
-        else:
-            x_fit = x_data
-            y_fit = fitted_curve
+        x_fit = x_data[t0:] if model_label == 'exponential' else x_data
+        y_fit = fitted_curve[t0:] if model_label == 'exponential' else fitted_curve
+        plt.plot(x_fit, y_fit, 'k--', label=f'Best Fit ({model_label})')
 
-        plt.plot(x_fit, y_fit, 'k--', label=f'Best Fit ({model_label})')        
-    plt.axvline(t_min, color='k', linestyle=':', label = rf'Minimum at $\tau = {t_min:.1f}$')
+    plt.axvline(t_min, color='k', linestyle=':', label=rf'Minimum at $t = {t_min:.1f}$')
     plt.axvspan(flag_1, flag_2, color='gray', alpha=0.3, label='Analysis window')
-    plt.xlabel(r'$\tau$', fontsize=16, labelpad=6)
-    plt.ylabel(r'$\Gamma{(quartile mean)}$', fontsize=16, labelpad=6)
-    plt.title("Quartile Means Over Time")
-    plt.legend()
-    plt.tight_layout()
-    plt.savefig(os.path.join(save_dir, "quartile_means.png"))
-    plt.close()
+    plt.xlabel(r'$t$', fontsize=18, labelpad=8)
+    plt.ylabel(r'$T_{\mathrm{quartile\ mean}}$', fontsize=18, labelpad=8)
+    plt.xticks(fontsize=18)
+    plt.yticks(fontsize=18)
+    plt.title("Quartile Means Over Time", fontsize=18)
+    plt.legend(fontsize=12)
+    plt.legend(); plt.tight_layout()
+    plt.savefig(os.path.join(save_dir, "quartile_means.png")); plt.close()
 
-    # --- Plot 2: All qubits ---
-    plt.figure(figsize=(10, 6))
-    for i in range(time_series.shape[1]):
-        plt.plot(time_series[:, i], alpha=0.5)
-    plt.axvspan(flag_1, flag_2, color='gray', alpha=0.3)
-    plt.xlabel(r'$\tau$')
-    plt.ylabel(r'$\Gamma$')
-    plt.title("Individual Qubit Values Over Time")
-    plt.tight_layout()
-    plt.savefig(os.path.join(save_dir, "all_qubits_over_time.png"))
-    plt.close()
+    return (f"Plots saved in: {save_dir}. Best model: {model_label}, "
+            f"minimum at t = {t_min:.2f}" if t_min is not None else
+            "Plots saved, but model fitting failed.")
 
-    return f"Plots saved in: {save_dir}. Best model: {model_label}, minimum at t = {t_min:.2f}" if t_min is not None else "Plots saved, but model fitting failed."
+
+# endregion
+
+# region 9. GPU Yolo
+def run_yolo_on_tensor_GPU(
+    tensor,
+    weights_path,
+    grid_size,
+    conf_thres=0.25,
+    temp_dir="frames_detect",
+    output_dir="annotated_frames",
+    output_video="detected_impacts.mp4",
+    draw_centers=True,
+    save_annotated_frames=True,
+    device="cuda" 
+):
+    shutil.rmtree(temp_dir, ignore_errors=True)
+    shutil.rmtree(output_dir, ignore_errors=True)
+    os.makedirs(temp_dir, exist_ok=True)
+    os.makedirs(output_dir, exist_ok=True)
+
+    vmin, vmax = float(np.min(tensor)), float(np.max(tensor))
+    for i, frame in enumerate(tensor):
+        fig, ax = plt.subplots()
+        ax.imshow(frame, cmap='viridis', vmin=vmin, vmax=vmax)
+        ax.axis('off')
+        plt.savefig(os.path.join(temp_dir, f"frame_{i:04d}.png"),
+                    bbox_inches='tight', pad_inches=0)
+        plt.close(fig)
+
+    device = select_device(device)
+    print(f"DEVICE: {device}")
+    model = DetectMultiBackend(weights_path, device=device)
+    stride, names, pt = model.stride, model.names, model.pt
+    model.warmup(imgsz=(1, 3, 640, 640))
+    dataset = LoadImages(temp_dir, img_size=640, stride=stride, auto=pt)
+
+    detections = []
+    result_frames = []
+
+    for path, img, im0, _, _ in dataset:
+        img = torch.from_numpy(img).to(device).float() / 255.0
+        if img.ndimension() == 3:
+            img = img.unsqueeze(0)
+
+        with torch.no_grad():
+            pred = model(img)
+        pred = non_max_suppression(pred, conf_thres=conf_thres)
+
+        annotator = Annotator(im0.copy(), line_width=2, example=str(names))
+        frame_id = int(os.path.basename(path).split("_")[1].split(".")[0])
+
+        for det in pred:
+            if det is not None and len(det):
+                det[:, :4] = scale_boxes(img.shape[2:], det[:, :4], im0.shape).round()
+                for *xyxy, conf, cls in det:
+                    x1, y1, x2, y2 = [int(c.item()) for c in xyxy]
+                    label = f"{names[int(cls)]} {conf:.2f}"
+                    annotator.box_label([x1, y1, x2, y2], label=label)
+
+                    x_center_px = (x1 + x2) // 2
+                    y_center_px = (y1 + y2) // 2
+                    if draw_centers:
+                        cv2.circle(annotator.im, (x_center_px, y_center_px), 6, (0, 0, 255), -1)
+
+                    h, w = im0.shape[:2]
+                    x_center_grid = (x_center_px / w) * grid_size
+                    y_center_grid = (y_center_px / h) * grid_size
+                    detections.append((frame_id, float(x_center_grid), float(y_center_grid)))
+
+        annotated = annotator.result()
+        result_frames.append(annotated)
+        if save_annotated_frames:
+            cv2.imwrite(os.path.join(output_dir, f"annot_{frame_id:04d}.png"), annotated)
+
+    if result_frames:
+        h, w = result_frames[0].shape[:2]
+        out = cv2.VideoWriter(output_video, cv2.VideoWriter_fourcc(*'mp4v'), 10, (w, h))
+        for frame in result_frames:
+            out.write(frame)
+        out.release()
+        print(f"Annotated video: {output_video}")
+    else:
+        print("No frames annotated — try lowering conf_thres or verify weights.")
+
+    return detections
+
 # endregion

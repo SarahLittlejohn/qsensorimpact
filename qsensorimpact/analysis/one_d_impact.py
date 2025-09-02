@@ -39,19 +39,16 @@ def analyse_one_d_impact(matrix_data, d, matrix_errors=None, params=True):
     min_switching_rate_errors = []
     min_times_errors = []
 
-    # Create a matrix of simulated switching rates & errors
     def propagate_fit_errors(x, popt, perr):
         a, b, c, d = popt
         sigma_a, sigma_b, sigma_c, sigma_d = perr
 
-        # Compute partial derivatives
         exp_term = np.exp(-((x - b) ** 2) / (2 * c ** 2))
         df_da = -exp_term
         df_db = a * exp_term * ((x - b) / (c ** 2))
         df_dc = a * exp_term * ((x - b) ** 2) / (c ** 3)
-        df_dd = 1  # d contributes directly
+        df_dd = 1
 
-        # Propagated error formula
         sigma_y = np.sqrt((df_da * sigma_a) ** 2 +
                         (df_db * sigma_b) ** 2 +
                         (df_dc * sigma_c) ** 2 +
@@ -70,10 +67,8 @@ def analyse_one_d_impact(matrix_data, d, matrix_errors=None, params=True):
 
         return reverse_bell_curve(x, *popt), popt, perr
 
-    # Create a figure with 4 subplots
     fig, axs = plt.subplots(2, 2, figsize=(12, 10))
 
-    # --- Top Left: Switching Rates with Fits ---
     baseline_row = matrix_data[0]
     x_baseline = np.arange(len(baseline_row))
     valid_baseline_indices = ~np.isnan(baseline_row)
@@ -118,12 +113,10 @@ def analyse_one_d_impact(matrix_data, d, matrix_errors=None, params=True):
     axs[0, 0].set_xlabel("Time Steps")
     axs[0, 0].set_ylabel("Switching Rate")
 
-    # --- Top Right: Legend for the First Plot ---
-    axs[0, 1].axis("off")  # Turn off the axis
+    axs[0, 1].axis("off")
     handles, labels = axs[0, 0].get_legend_handles_labels()
     axs[0, 1].legend(handles, labels, loc='center', title="Legend", ncol=3, frameon=False, fontsize=8, borderpad=1)
 
-    # --- Bottom Left: Scatter Plot of Minimum Switching Rates with Fits ---
     if matrix_errors is not None:
         axs[1, 0].errorbar(
             min_times,
@@ -149,7 +142,6 @@ def analyse_one_d_impact(matrix_data, d, matrix_errors=None, params=True):
     axs[1, 0].set_xlabel("Time (min_times)")
     axs[1, 0].set_ylabel("Min Switching Rate")
 
-    # Add left and right exponential fits
     def exp_left(x, alpha, c):
         return -np.exp(alpha * x) + c
 
@@ -163,7 +155,6 @@ def analyse_one_d_impact(matrix_data, d, matrix_errors=None, params=True):
     left_rates = min_switching_rates[:min_index + 1]
     right_rates = min_switching_rates[min_index:]
 
-    # Fit exponential curves
     left_params, _ = curve_fit(exp_left, left_times, left_rates, p0=[0.001, 6.0], maxfev=5000)
     right_params, _ = curve_fit(exp_right, right_times, right_rates, p0=[0.001, right_times[0], 4.0], maxfev=5000)
 
@@ -177,13 +168,11 @@ def analyse_one_d_impact(matrix_data, d, matrix_errors=None, params=True):
     axs[1, 0].plot(x_right_smooth, y_right_fit, color='green', linewidth=2, label="Right Fit")
     axs[1, 0].legend()
 
-    # --- Bottom Right: Qubit Layout ---
     axs[1, 1].set_aspect('equal', adjustable='box')
     for dist in adjusted_d:
         circle = plt.Circle((dist, 0), 0.2, color='C0', fill=True)
         axs[1, 1].add_patch(circle)
 
-    # Highlight the extracted minimum distance
     crossover_time = fsolve(lambda x: exp_left(x, *left_params) - exp_right(x, *right_params), min_times[min_index])[0]
     global_min_d = (crossover_time - 100) / 50
     if global_min_d is not None:
@@ -195,11 +184,9 @@ def analyse_one_d_impact(matrix_data, d, matrix_errors=None, params=True):
     axs[1, 1].set_ylim(-1, 1)
     axs[1, 1].legend(loc='lower center', bbox_to_anchor=(0.5, -0.2), fontsize=8, ncol=1)
 
-    # Final layout adjustments
     plt.tight_layout()
     plt.show()
 
-    # Print extracted parameters
     print(f"Crossover Time: {crossover_time:.2f}")
     print(f"Extracted d_impact: {global_min_d:.2f}")
     if matrix_errors is not None:
@@ -207,7 +194,6 @@ def analyse_one_d_impact(matrix_data, d, matrix_errors=None, params=True):
         print("Original data error at min:", error_valid[min_index])
 
     if params:
-        # Fit the exponetial decay
         def exp_decay(distance, lambda_):
             return 7 - 4 * np.exp(-lambda_ * distance)
 
