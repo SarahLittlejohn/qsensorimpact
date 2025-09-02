@@ -23,12 +23,12 @@ def generate_gaussian_matrix(baseline, initial_amplitude, distances, length_impa
     dip_times = np.array(distances) * 50  # Times for dips: t = 50 * distance
     
     # Total length of the series based on the last Gaussian dip position
-    full_length = int(max(dip_times)) + length_impact + 50  # Add some buffer
+    full_length = int(max(dip_times)) + length_impact + 50 
     
     # Create the baseline series with noise
     baseline_series = np.random.normal(loc=baseline, scale=baseline_noise_std, size=full_length)
     
-    # Initialize a list to hold all the rows
+    # Initialise a list to hold all the rows
     rows = [baseline_series]  # Start with the noisy baseline as the first row
     
     # Generate Gaussian dip template
@@ -88,7 +88,7 @@ def generate_gaussian_matrix_variable_impact(baseline, initial_amplitude, distan
     # Create the baseline series with noise
     baseline_series = np.random.normal(loc=baseline, scale=baseline_noise_std, size=int(full_length))
     
-    # Initialize a list to hold all the rows
+    # Initialise a list to hold all the rows
     rows = [baseline_series]  # Start with the noisy baseline as the first row
     
     # Generate Gaussian dip template
@@ -343,12 +343,6 @@ def generate_2d_time_dependent_real_impact(
     noise_std=0,         
     baseline_noise_std=0 
 ):
-    """
-    Real-impact generator using gamma-like temporal profile:
-      - per-frame noisy baseline
-      - impact field = baseline + Gamma(t) * spatial_Gaussian
-      - final frame = min(baseline_frame, impact_frame_noisy) so dips win
-    """
     E_dep = 0.4
     eta_ph = 0.3
     Delta = 190e-6
