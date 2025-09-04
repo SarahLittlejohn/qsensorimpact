@@ -9,8 +9,7 @@ import matplotlib.pyplot as plt
 matplotlib.use('TkAgg')
 from pathlib import Path
 import pandas as pd
-
-weights = Path(__file__).parent / "qsensorimpact/qsensorimpact/yolo/yolov5/runs/train/impact-model/weights/best.pt"
+weights = Path(__file__).parent.parent / "weights" / "best.pt"
 weights = str(weights.resolve())
 
 # Parameters repeated through each region

@@ -9,7 +9,7 @@ import matplotlib.pyplot as plt
 matplotlib.use('TkAgg')
 import pandas as pd
 from pathlib import Path
-weights = Path(__file__).parent / "yolo/yolov5/runs/train/impact-model/weights/best.pt"
+weights = Path(__file__).parent.parent / "weights" / "best.pt"
 weights = str(weights.resolve())
 
 # Parameters repeated through each region

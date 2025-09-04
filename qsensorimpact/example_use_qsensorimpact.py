@@ -8,7 +8,7 @@ import matplotlib
 import matplotlib.pyplot as plt
 matplotlib.use('TkAgg')
 from pathlib import Path
-weights = Path(__file__).parent / "qsensorimpact/qsensorimpact/yolo/yolov5/runs/train/impact-model/weights/best.pt"
+weights = Path(__file__).parent / "weights" / "best.pt"
 weights = str(weights.resolve())
 
 
